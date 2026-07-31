@@ -45,9 +45,11 @@ jobs:
             throw "Fetched revision mismatch: $resolved"
           }
 
-      - name: Apply reproducible Windows build fix
+      - name: Apply reproducible Windows build fixes
         shell: pwsh
         run: |
+          # Upstream messagesystem.h uses PrinterWindowsSpooler but does not
+          # include the header that defines it.
           $header = 'agent-src\messagesystem.h'
           $text = Get-Content $header -Raw
           $include = '#include "windowsprinter.h"'
@@ -59,11 +61,30 @@ jobs:
             $text = $text.Replace($needle, "$needle`r`n$include")
             Set-Content -Path $header -Value $text -NoNewline -Encoding utf8
           }
-
           if (-not (Select-String -Path $header -SimpleMatch $include -Quiet)) {
             throw 'Failed to add windowsprinter.h include.'
           }
-          Write-Host 'Applied upstream header self-containment fix.'
+
+          # Upstream posagent_resource.rc contains the original developer's
+          # absolute desktop path. Replace it with the absolute icon path on
+          # the current runner so the Windows resource compiler can find it.
+          $resource = 'agent-src\posagent_resource.rc'
+          $iconPath = (Resolve-Path 'agent-src\images\printagent_icon_big.ico').Path
+          $escapedIconPath = $iconPath.Replace('\', '\\')
+          $resourceText = Get-Content $resource -Raw
+          $pattern = 'IDI_ICON1\s+ICON\s+"[^"]+"'
+          $replacement = "IDI_ICON1`tICON`t`"$escapedIconPath`""
+          $updatedResourceText = [regex]::Replace($resourceText, $pattern, $replacement, 1)
+          if ($updatedResourceText -eq $resourceText) {
+            throw 'Could not replace the hardcoded icon path in posagent_resource.rc.'
+          }
+          Set-Content -Path $resource -Value $updatedResourceText -NoNewline -Encoding ascii
+          if (-not (Select-String -Path $resource -SimpleMatch $escapedIconPath -Quiet)) {
+            throw 'Failed to write the runner icon path into posagent_resource.rc.'
+          }
+
+          Write-Host 'Applied upstream header and resource-path build fixes.'
+          Write-Host "Resource icon: $iconPath"
 
       - name: Install Qt 6.5.2 MSVC x64
         uses: jurplel/install-qt-action@v4
@@ -220,7 +241,9 @@ jobs:
           Runner: windows-2022
           Generator: Visual Studio 17 2022 x64
           Qt: 6.5.2 win64_msvc2019_64
-          Applied fix: messagesystem.h explicitly includes windowsprinter.h
+          Applied fixes:
+          - messagesystem.h explicitly includes windowsprinter.h
+          - posagent_resource.rc uses the current runner's icon path
           Artifact: posagent-win64-dev.zip
           "@ | Out-File 'build-summary.txt' -Encoding utf8
 
