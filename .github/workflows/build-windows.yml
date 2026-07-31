@@ -51,8 +51,7 @@ jobs:
           version: '6.5.2'
           arch: 'win64_msvc2019_64'
           # install-qt-action appends a Qt directory below `dir`.
-          # The upstream CMakeLists.txt hardcodes C:\Qt\6.5.2\msvc2019_64,
-          # so the base directory must be C:\ rather than C:\Qt.
+          # Upstream CMakeLists.txt requires C:\Qt\6.5.2\msvc2019_64.
           dir: 'C:/'
           cache: true
 
@@ -182,11 +181,7 @@ jobs:
       - name: Create ZIP and checksums
         shell: pwsh
         run: |
-          Compress-Archive \
-            -Path '${{ steps.package.outputs.package_dir }}\*' \
-            -DestinationPath 'posagent-win64-dev.zip' \
-            -Force
-
+          Compress-Archive -Path '${{ steps.package.outputs.package_dir }}\*' -DestinationPath 'posagent-win64-dev.zip' -Force
           $hash = (Get-FileHash -Algorithm SHA256 'posagent-win64-dev.zip').Hash
           "$hash  posagent-win64-dev.zip" | Out-File 'SHA256SUMS.txt' -Encoding ascii
 
