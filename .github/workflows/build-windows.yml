@@ -50,145 +50,164 @@ jobs:
         with:
           version: '6.5.2'
           arch: 'win64_msvc2019_64'
-          dir: 'C:\Qt'
+          # install-qt-action appends a Qt directory below `dir`.
+          # The upstream CMakeLists.txt hardcodes C:\Qt\6.5.2\msvc2019_64,
+          # so the base directory must be C:\ rather than C:\Qt.
+          dir: 'C:/'
           cache: true
 
       - name: Verify Qt installation path
         shell: pwsh
         run: |
           $expected = 'C:\Qt\6.5.2\msvc2019_64'
-          if (-not (Test-Path (Join-Path $expected 'bin\windeployqt.exe'))) {
-            Write-Host "QT_ROOT_DIR=$env:QT_ROOT_DIR"
-            Get-ChildItem C:\Qt -Depth 3 -ErrorAction SilentlyContinue | Select-Object FullName | Out-String | Write-Host
-            throw "Qt was not installed at the path required by the upstream CMakeLists.txt: $expected"
+          $deploy = Join-Path $expected 'bin\windeployqt.exe'
+          Write-Host "QT_ROOT_DIR=$env:QT_ROOT_DIR"
+          Write-Host "Expected Qt path=$expected"
+          if (-not (Test-Path $deploy)) {
+            Get-ChildItem -Path 'C:\Qt' -Depth 4 -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty FullName | Write-Host
+            throw "Qt was not installed at the path required by upstream CMakeLists.txt: $expected"
           }
 
-      - name: Configure CMake
+      - name: Configure with CMake
         shell: pwsh
         run: |
-          cmake -S agent-src -B build-win64 -A x64 -DCMAKE_BUILD_TYPE=Release 2>&1 |
+          cmake -S agent-src -B build-win64 -G "Visual Studio 17 2022" -A x64 2>&1 |
             Tee-Object -FilePath configure.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Release
         shell: pwsh
         run: |
-          cmake --build build-win64 --config Release 2>&1 |
+          cmake --build build-win64 --config Release --parallel 2 2>&1 |
             Tee-Object -FilePath build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Locate executable and verify x64 PE header
-        id: executable
+      - name: Locate and verify executable
+        id: locate
         shell: pwsh
         run: |
-          $exe = Get-ChildItem build-win64 -Recurse -Filter posagent.exe | Select-Object -First 1
-          if (-not $exe) { throw 'posagent.exe was not found after the build.' }
+          $exe = Get-ChildItem -Path build-win64 -Recurse -Filter 'posagent.exe' |
+            Select-Object -First 1
+          if (-not $exe) { throw 'posagent.exe was not produced.' }
 
-          $bytes = [System.IO.File]::ReadAllBytes($exe.FullName)
-          if ($bytes.Length -lt 0x100) { throw 'The built executable is unexpectedly small.' }
-          $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
-          $signature = [Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4)
-          if ($signature -ne "PE`0`0") { throw 'Invalid PE signature.' }
-          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          $stream = [System.IO.File]::OpenRead($exe.FullName)
+          try {
+            $reader = [System.IO.BinaryReader]::new($stream)
+            $stream.Position = 0x3c
+            $peOffset = $reader.ReadInt32()
+            $stream.Position = $peOffset + 4
+            $machine = $reader.ReadUInt16()
+          } finally {
+            $stream.Dispose()
+          }
           if ($machine -ne 0x8664) {
-            throw ('Expected AMD64 machine 0x8664, got 0x{0:X4}.' -f $machine)
+            throw ('Expected x64 PE machine 0x8664, got 0x{0:X4}' -f $machine)
           }
 
-          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
           Write-Host "Built x64 executable: $($exe.FullName)"
 
-      - name: Prepare portable package
+      - name: Prepare runnable package
         id: package
         shell: pwsh
         run: |
-          $dir = 'package\posagent-win64-dev'
-          New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item '${{ steps.executable.outputs.path }}' (Join-Path $dir 'posagent-win64-dev.exe')
-          "dir=$dir" >> $env:GITHUB_OUTPUT
+          $packageDir = Join-Path $PWD 'package\posagent-win64-dev'
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item '${{ steps.locate.outputs.exe_path }}' (Join-Path $packageDir 'posagent-win64-dev.exe')
+          "package_dir=$packageDir" >> $env:GITHUB_OUTPUT
 
       - name: Deploy Qt runtime
         shell: pwsh
         run: |
-          $tool = 'C:\Qt\6.5.2\msvc2019_64\bin\windeployqt.exe'
-          $exe = Join-Path '${{ steps.package.outputs.dir }}' 'posagent-win64-dev.exe'
-          & $tool --release --compiler-runtime $exe 2>&1 | Tee-Object -FilePath windeployqt.log
+          $windeployqt = 'C:\Qt\6.5.2\msvc2019_64\bin\windeployqt.exe'
+          $exe = Join-Path '${{ steps.package.outputs.package_dir }}' 'posagent-win64-dev.exe'
+          & $windeployqt --release --compiler-runtime $exe 2>&1 |
+            Tee-Object -FilePath windeployqt.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify portable package
+      - name: Verify packaged runtime
         shell: pwsh
         run: |
-          $dir = '${{ steps.package.outputs.dir }}'
+          $packageDir = '${{ steps.package.outputs.package_dir }}'
           $required = @(
-            'posagent-win64-dev.exe',
             'Qt6Core.dll',
             'Qt6Gui.dll',
             'Qt6Widgets.dll',
             'Qt6PrintSupport.dll',
             'platforms\qwindows.dll'
           )
-          $missing = @($required | Where-Object { -not (Test-Path (Join-Path $dir $_)) })
+          $missing = @($required | Where-Object {
+            -not (Test-Path (Join-Path $packageDir $_))
+          })
           if ($missing.Count -gt 0) {
             throw "Missing runtime files: $($missing -join ', ')"
           }
 
-      - name: Bundle license notices
+      - name: Bundle licenses
         shell: pwsh
         run: |
-          $dir = '${{ steps.package.outputs.dir }}'
-          Copy-Item 'agent-src\LICENSE' (Join-Path $dir 'LICENSE-posagent.txt')
-          $notices = Join-Path $dir 'THIRD-PARTY-NOTICES'
-          New-Item -ItemType Directory -Force $notices | Out-Null
-          if (Test-Path 'agent-src\zlib\LICENSE') {
-            Copy-Item 'agent-src\zlib\LICENSE' (Join-Path $notices 'zlib-LICENSE.txt')
-          }
-          if (Test-Path 'agent-src\rapidjson\license.txt') {
-            Copy-Item 'agent-src\rapidjson\license.txt' (Join-Path $notices 'rapidjson-LICENSE.txt')
-          }
-          if (Test-Path 'agent-src\uWebSockets\LICENSE') {
-            Copy-Item 'agent-src\uWebSockets\LICENSE' (Join-Path $notices 'uWebSockets-LICENSE.txt')
-          }
-          'Qt 6.5.2 is dynamically linked. Review Qt LGPL/commercial licensing requirements before distribution.' |
-            Set-Content (Join-Path $notices 'Qt-NOTICE.txt')
+          $packageDir = '${{ steps.package.outputs.package_dir }}'
+          Copy-Item 'agent-src\LICENSE' (Join-Path $packageDir 'LICENSE-posagent.txt')
+          $noticeDir = Join-Path $packageDir 'THIRD-PARTY-NOTICES'
+          New-Item -ItemType Directory -Force -Path $noticeDir | Out-Null
 
-      - name: Best-effort startup smoke test
-        continue-on-error: true
+          $licenses = @(
+            @{ Source = 'agent-src\zlib\LICENSE'; Target = 'zlib-LICENSE.txt' },
+            @{ Source = 'agent-src\rapidjson\license.txt'; Target = 'rapidjson-LICENSE.txt' },
+            @{ Source = 'agent-src\uWebSockets\LICENSE'; Target = 'uWebSockets-LICENSE.txt' }
+          )
+          foreach ($item in $licenses) {
+            if (Test-Path $item.Source) {
+              Copy-Item $item.Source (Join-Path $noticeDir $item.Target)
+            }
+          }
+          'Qt 6.5.2 is dynamically linked. See https://www.qt.io/licensing/' |
+            Out-File (Join-Path $noticeDir 'Qt-NOTICE.txt') -Encoding utf8
+
+      - name: Smoke test package
         shell: pwsh
+        continue-on-error: true
         run: |
-          $exe = Join-Path '${{ steps.package.outputs.dir }}' 'posagent-win64-dev.exe'
+          $exe = Join-Path '${{ steps.package.outputs.package_dir }}' 'posagent-win64-dev.exe'
           $process = Start-Process -FilePath $exe -PassThru
           Start-Sleep -Seconds 5
           if (-not $process.HasExited) {
-            Write-Host 'Process remained running for five seconds; no immediate missing-DLL crash.'
+            Write-Host 'Process stayed running for five seconds; stopping smoke test.'
             Stop-Process -Id $process.Id -Force
           } elseif ($process.ExitCode -ne 0) {
-            Write-Warning "Process exited early with code $($process.ExitCode). A headless runner cannot fully validate a tray application."
+            Write-Warning "Process exited during headless smoke test with code $($process.ExitCode)."
           }
 
-      - name: Create ZIP, checksum and build summary
+      - name: Create ZIP and checksums
         shell: pwsh
         run: |
-          Compress-Archive -Path '${{ steps.package.outputs.dir }}\*' -DestinationPath posagent-win64-dev.zip -Force
-          $hash = (Get-FileHash -Algorithm SHA256 posagent-win64-dev.zip).Hash
-          "$hash  posagent-win64-dev.zip" | Set-Content -Encoding ascii SHA256SUMS.txt
+          Compress-Archive \
+            -Path '${{ steps.package.outputs.package_dir }}\*' \
+            -DestinationPath 'posagent-win64-dev.zip' \
+            -Force
 
+          $hash = (Get-FileHash -Algorithm SHA256 'posagent-win64-dev.zip').Hash
+          "$hash  posagent-win64-dev.zip" | Out-File 'SHA256SUMS.txt' -Encoding ascii
+
+      - name: Create build summary
+        shell: pwsh
+        run: |
           @"
-          POSAgent Windows x64 baseline build
-          ===================================
+          POSAgent baseline Windows build
+          ===============================
           Upstream repository: dieg0-a/posagentpro-src
           Upstream commit: ${{ steps.source.outputs.commit }}
-          Build repository commit: ${{ github.sha }}
+          Runner: windows-latest
+          Generator: Visual Studio 17 2022 x64
           Qt: 6.5.2 win64_msvc2019_64
-          Configuration: Release x64
+          Artifact: posagent-win64-dev.zip
+          "@ | Out-File 'build-summary.txt' -Encoding utf8
 
-          This CI run validates compilation and portable Qt packaging only.
-          Physical USB printing, tray UI, printer enumeration and cash drawer output still require a real Windows acceptance test.
-          "@ | Set-Content build-summary.txt
-
-      - name: Upload portable Windows artifact
+      - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
           name: posagent-win64-dev
-          retention-days: 14
           path: |
             posagent-win64-dev.zip
             SHA256SUMS.txt
@@ -196,3 +215,5 @@ jobs:
             configure.log
             build.log
             windeployqt.log
+          if-no-files-found: error
+          retention-days: 14
