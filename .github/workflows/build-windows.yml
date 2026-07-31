@@ -1,0 +1,198 @@
+name: Build POSAgent Windows x64
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: posagent-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout build repository
+        uses: actions/checkout@v4
+
+      - name: Read pinned upstream revision
+        id: source
+        shell: pwsh
+        run: |
+          $commit = (Get-Content UPSTREAM_COMMIT -Raw).Trim()
+          if ($commit -notmatch '^[0-9a-f]{40}$') {
+            throw 'UPSTREAM_COMMIT must contain a full 40-character Git SHA.'
+          }
+          "commit=$commit" >> $env:GITHUB_OUTPUT
+          Write-Host "Pinned upstream commit: $commit"
+
+      - name: Fetch pinned POSAgent source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force agent-src | Out-Null
+          git -C agent-src init
+          git -C agent-src remote add origin https://github.com/dieg0-a/posagentpro-src.git
+          git -C agent-src fetch --depth 1 origin ${{ steps.source.outputs.commit }}
+          git -C agent-src checkout --detach FETCH_HEAD
+          $resolved = (git -C agent-src rev-parse HEAD).Trim()
+          if ($resolved -ne '${{ steps.source.outputs.commit }}') {
+            throw "Fetched revision mismatch: $resolved"
+          }
+
+      - name: Install Qt 6.5.2 MSVC x64
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.5.2'
+          arch: 'win64_msvc2019_64'
+          dir: 'C:\Qt'
+          cache: true
+
+      - name: Verify Qt installation path
+        shell: pwsh
+        run: |
+          $expected = 'C:\Qt\6.5.2\msvc2019_64'
+          if (-not (Test-Path (Join-Path $expected 'bin\windeployqt.exe'))) {
+            Write-Host "QT_ROOT_DIR=$env:QT_ROOT_DIR"
+            Get-ChildItem C:\Qt -Depth 3 -ErrorAction SilentlyContinue | Select-Object FullName | Out-String | Write-Host
+            throw "Qt was not installed at the path required by the upstream CMakeLists.txt: $expected"
+          }
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -S agent-src -B build-win64 -A x64 -DCMAKE_BUILD_TYPE=Release 2>&1 |
+            Tee-Object -FilePath configure.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Release
+        shell: pwsh
+        run: |
+          cmake --build build-win64 --config Release 2>&1 |
+            Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Locate executable and verify x64 PE header
+        id: executable
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem build-win64 -Recurse -Filter posagent.exe | Select-Object -First 1
+          if (-not $exe) { throw 'posagent.exe was not found after the build.' }
+
+          $bytes = [System.IO.File]::ReadAllBytes($exe.FullName)
+          if ($bytes.Length -lt 0x100) { throw 'The built executable is unexpectedly small.' }
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+          $signature = [Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4)
+          if ($signature -ne "PE`0`0") { throw 'Invalid PE signature.' }
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne 0x8664) {
+            throw ('Expected AMD64 machine 0x8664, got 0x{0:X4}.' -f $machine)
+          }
+
+          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          Write-Host "Built x64 executable: $($exe.FullName)"
+
+      - name: Prepare portable package
+        id: package
+        shell: pwsh
+        run: |
+          $dir = 'package\posagent-win64-dev'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item '${{ steps.executable.outputs.path }}' (Join-Path $dir 'posagent-win64-dev.exe')
+          "dir=$dir" >> $env:GITHUB_OUTPUT
+
+      - name: Deploy Qt runtime
+        shell: pwsh
+        run: |
+          $tool = 'C:\Qt\6.5.2\msvc2019_64\bin\windeployqt.exe'
+          $exe = Join-Path '${{ steps.package.outputs.dir }}' 'posagent-win64-dev.exe'
+          & $tool --release --compiler-runtime $exe 2>&1 | Tee-Object -FilePath windeployqt.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify portable package
+        shell: pwsh
+        run: |
+          $dir = '${{ steps.package.outputs.dir }}'
+          $required = @(
+            'posagent-win64-dev.exe',
+            'Qt6Core.dll',
+            'Qt6Gui.dll',
+            'Qt6Widgets.dll',
+            'Qt6PrintSupport.dll',
+            'platforms\qwindows.dll'
+          )
+          $missing = @($required | Where-Object { -not (Test-Path (Join-Path $dir $_)) })
+          if ($missing.Count -gt 0) {
+            throw "Missing runtime files: $($missing -join ', ')"
+          }
+
+      - name: Bundle license notices
+        shell: pwsh
+        run: |
+          $dir = '${{ steps.package.outputs.dir }}'
+          Copy-Item 'agent-src\LICENSE' (Join-Path $dir 'LICENSE-posagent.txt')
+          $notices = Join-Path $dir 'THIRD-PARTY-NOTICES'
+          New-Item -ItemType Directory -Force $notices | Out-Null
+          if (Test-Path 'agent-src\zlib\LICENSE') {
+            Copy-Item 'agent-src\zlib\LICENSE' (Join-Path $notices 'zlib-LICENSE.txt')
+          }
+          if (Test-Path 'agent-src\rapidjson\license.txt') {
+            Copy-Item 'agent-src\rapidjson\license.txt' (Join-Path $notices 'rapidjson-LICENSE.txt')
+          }
+          if (Test-Path 'agent-src\uWebSockets\LICENSE') {
+            Copy-Item 'agent-src\uWebSockets\LICENSE' (Join-Path $notices 'uWebSockets-LICENSE.txt')
+          }
+          'Qt 6.5.2 is dynamically linked. Review Qt LGPL/commercial licensing requirements before distribution.' |
+            Set-Content (Join-Path $notices 'Qt-NOTICE.txt')
+
+      - name: Best-effort startup smoke test
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $exe = Join-Path '${{ steps.package.outputs.dir }}' 'posagent-win64-dev.exe'
+          $process = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 5
+          if (-not $process.HasExited) {
+            Write-Host 'Process remained running for five seconds; no immediate missing-DLL crash.'
+            Stop-Process -Id $process.Id -Force
+          } elseif ($process.ExitCode -ne 0) {
+            Write-Warning "Process exited early with code $($process.ExitCode). A headless runner cannot fully validate a tray application."
+          }
+
+      - name: Create ZIP, checksum and build summary
+        shell: pwsh
+        run: |
+          Compress-Archive -Path '${{ steps.package.outputs.dir }}\*' -DestinationPath posagent-win64-dev.zip -Force
+          $hash = (Get-FileHash -Algorithm SHA256 posagent-win64-dev.zip).Hash
+          "$hash  posagent-win64-dev.zip" | Set-Content -Encoding ascii SHA256SUMS.txt
+
+          @"
+          POSAgent Windows x64 baseline build
+          ===================================
+          Upstream repository: dieg0-a/posagentpro-src
+          Upstream commit: ${{ steps.source.outputs.commit }}
+          Build repository commit: ${{ github.sha }}
+          Qt: 6.5.2 win64_msvc2019_64
+          Configuration: Release x64
+
+          This CI run validates compilation and portable Qt packaging only.
+          Physical USB printing, tray UI, printer enumeration and cash drawer output still require a real Windows acceptance test.
+          "@ | Set-Content build-summary.txt
+
+      - name: Upload portable Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: posagent-win64-dev
+          retention-days: 14
+          path: |
+            posagent-win64-dev.zip
+            SHA256SUMS.txt
+            build-summary.txt
+            configure.log
+            build.log
+            windeployqt.log
