@@ -1,0 +1,27 @@
+# Build output
+build*/
+package/
+releases/*.zip
+releases/*.exe
+*.log
+SHA256SUMS.txt
+
+# IDE / generated files
+.vs/
+.vscode/
+.idea/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.obj
+*.o
+*.pdb
+*.ilk
+
+# Python / Odoo
+__pycache__/
+*.py[cod]
+
+# OS
+.DS_Store
+Thumbs.db
