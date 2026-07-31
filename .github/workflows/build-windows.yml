@@ -14,8 +14,6 @@ concurrency:
 
 jobs:
   build:
-    # windows-latest now points to a newer image without the VS 2022
-    # CMake generator required by the upstream project. Pin the runner.
     runs-on: windows-2022
     timeout-minutes: 45
 
@@ -47,43 +45,54 @@ jobs:
             throw "Fetched revision mismatch: $resolved"
           }
 
-      - name: Verify Visual Studio 2022
+      - name: Apply reproducible Windows build fix
         shell: pwsh
         run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (-not (Test-Path $vswhere)) {
-            throw 'vswhere.exe was not found on the Windows 2022 runner.'
+          $header = 'agent-src\messagesystem.h'
+          $text = Get-Content $header -Raw
+          $include = '#include "windowsprinter.h"'
+          if ($text -notmatch [regex]::Escape($include)) {
+            $needle = '#include "printer.hpp"'
+            if ($text -notmatch [regex]::Escape($needle)) {
+              throw 'Could not locate printer.hpp include in messagesystem.h.'
+            }
+            $text = $text.Replace($needle, "$needle`r`n$include")
+            Set-Content -Path $header -Value $text -NoNewline -Encoding utf8
           }
-          $installation = & $vswhere -latest -version '[17.0,18.0)' -products * -requires Microsoft.Component.MSBuild -property installationPath
-          if (-not $installation) {
-            throw 'Visual Studio 2022 with MSBuild was not found.'
+
+          if (-not (Select-String -Path $header -SimpleMatch $include -Quiet)) {
+            throw 'Failed to add windowsprinter.h include.'
           }
-          Write-Host "Visual Studio 2022: $installation"
+          Write-Host 'Applied upstream header self-containment fix.'
 
       - name: Install Qt 6.5.2 MSVC x64
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.5.2'
           arch: 'win64_msvc2019_64'
-          # install-qt-action appends a Qt directory below `dir`.
-          # Upstream CMakeLists.txt requires C:\Qt\6.5.2\msvc2019_64.
           dir: 'C:/'
           cache: true
 
-      - name: Verify Qt installation path
+      - name: Verify Visual Studio and Qt
         shell: pwsh
         run: |
-          $expected = 'C:\Qt\6.5.2\msvc2019_64'
-          $deploy = Join-Path $expected 'bin\windeployqt.exe'
-          Write-Host "QT_ROOT_DIR=$env:QT_ROOT_DIR"
-          Write-Host "Expected Qt path=$expected"
-          if (-not (Test-Path $deploy)) {
-            Get-ChildItem -Path 'C:\Qt' -Depth 4 -ErrorAction SilentlyContinue |
-              Select-Object -ExpandProperty FullName | Write-Host
-            throw "Qt was not installed at the path required by upstream CMakeLists.txt: $expected"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) {
+            throw 'vswhere.exe was not found.'
           }
+          $vs = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          if (-not $vs) {
+            throw 'Visual Studio with MSBuild was not found.'
+          }
+          Write-Host "Visual Studio: $vs"
 
-      - name: Configure with CMake
+          $qt = 'C:\Qt\6.5.2\msvc2019_64'
+          if (-not (Test-Path (Join-Path $qt 'bin\windeployqt.exe'))) {
+            throw "Qt was not installed at the required path: $qt"
+          }
+          Write-Host "Qt: $qt"
+
+      - name: Configure CMake
         shell: pwsh
         run: |
           cmake -S agent-src -B build-win64 -G "Visual Studio 17 2022" -A x64 2>&1 |
@@ -211,6 +220,7 @@ jobs:
           Runner: windows-2022
           Generator: Visual Studio 17 2022 x64
           Qt: 6.5.2 win64_msvc2019_64
+          Applied fix: messagesystem.h explicitly includes windowsprinter.h
           Artifact: posagent-win64-dev.zip
           "@ | Out-File 'build-summary.txt' -Encoding utf8
 
