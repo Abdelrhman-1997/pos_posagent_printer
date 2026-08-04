@@ -132,19 +132,19 @@ addDockWidget(Qt::RightDockWidgetArea, printerDock);
 }
 Set-Content $mainWindowPath $mainWindow -NoNewline -Encoding utf8
 
-if (-not (Select-String $cmakePath -SimpleMatch 'dsoftoperationswidget.cpp' -Quiet)) {
+if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftoperationswidget.cpp' -Quiet)) {
     throw 'Operations widget files were not added to CMake.'
 }
-if (-not (Select-String $cmakePath -SimpleMatch 'dsoftstatusapi.cpp' -Quiet)) {
+if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftstatusapi.cpp' -Quiet)) {
     throw 'Status API files were not added to CMake.'
 }
-if (-not (Select-String $mainPath -SimpleMatch 'DSoftSingleInstance singleInstance' -Quiet)) {
+if (-not (Select-String -Path $mainPath -SimpleMatch 'DSoftSingleInstance singleInstance' -Quiet)) {
     throw 'Single-instance guard was not installed in main.cpp.'
 }
-if (-not (Select-String $mainPath -SimpleMatch '/dsoft/api/v1/printers' -Quiet)) {
+if (-not (Select-String -Path $mainPath -SimpleMatch '/dsoft/api/v1/printers' -Quiet)) {
     throw 'DSoft status API routes were not installed in main.cpp.'
 }
-if (-not (Select-String $mainWindowPath -SimpleMatch 'DSoft Operations' -Quiet)) {
+if (-not (Select-String -Path $mainWindowPath -SimpleMatch 'DSoft Operations' -Quiet)) {
     throw 'Operations dashboard was not installed in mainwindow.cpp.'
 }
 
