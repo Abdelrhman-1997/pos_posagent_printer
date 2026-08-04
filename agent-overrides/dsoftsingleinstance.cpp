@@ -1,6 +1,7 @@
 #include "dsoftsingleinstance.h"
 
 #include <QDir>
+#include <QRegularExpression>
 #include <QStandardPaths>
 
 DSoftSingleInstance::DSoftSingleInstance(const QString &applicationId)
