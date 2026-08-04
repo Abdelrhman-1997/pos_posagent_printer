@@ -19,7 +19,9 @@ $overrideFiles = @(
     'printerroutingrequest.cpp',
     'dsoftprintjob.h',
     'dsoftprintqueue.h',
-    'dsoftprintqueue.cpp'
+    'dsoftprintqueue.cpp',
+    'dsoftprinterservice.h',
+    'dsoftprinterservice.cpp'
 )
 
 foreach ($file in $overrideFiles) {
@@ -40,14 +42,22 @@ $replacement = @'
         printerprofilemanager.h printerprofilemanager.cpp
         printerroutingrequest.h printerroutingrequest.cpp
         dsoftprintjob.h dsoftprintqueue.h dsoftprintqueue.cpp
+        dsoftprinterservice.h dsoftprinterservice.cpp
 '@
 
-if ($cmake -notmatch [regex]::Escape('dsoftprintqueue.cpp')) {
-    if ($cmake -match [regex]::Escape('printerprofilemanager.cpp')) {
+if ($cmake -notmatch [regex]::Escape('dsoftprinterservice.cpp')) {
+    if ($cmake -match [regex]::Escape('dsoftprintqueue.cpp')) {
+        $cmake = [regex]::Replace(
+            $cmake,
+            'dsoftprintjob\.h\s+dsoftprintqueue\.h\s+dsoftprintqueue\.cpp',
+            "dsoftprintjob.h dsoftprintqueue.h dsoftprintqueue.cpp`r`n        dsoftprinterservice.h dsoftprinterservice.cpp",
+            1
+        )
+    } elseif ($cmake -match [regex]::Escape('printerprofilemanager.cpp')) {
         $cmake = [regex]::Replace(
             $cmake,
             'printerroutingrequest\.h\s+printerroutingrequest\.cpp',
-            "printerroutingrequest.h printerroutingrequest.cpp`r`n        dsoftprintjob.h dsoftprintqueue.h dsoftprintqueue.cpp",
+            "printerroutingrequest.h printerroutingrequest.cpp`r`n        dsoftprintjob.h dsoftprintqueue.h dsoftprintqueue.cpp`r`n        dsoftprinterservice.h dsoftprinterservice.cpp",
             1
         )
     } else {
@@ -65,8 +75,8 @@ foreach ($file in $overrideFiles) {
     }
 }
 
-if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftprintqueue.cpp' -Quiet)) {
-    throw 'CMakeLists.txt was not updated with DSoft routed queue sources.'
+if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftprinterservice.cpp' -Quiet)) {
+    throw 'CMakeLists.txt was not updated with all DSoft sources.'
 }
 
 Write-Host 'Applied DSoft multi-printer foundation sources.'
