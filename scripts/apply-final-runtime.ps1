@@ -7,6 +7,7 @@ $files = @(
     'dsoftsingleinstance.h', 'dsoftsingleinstance.cpp',
     'dsoftlegacymigrator.h', 'dsoftlegacymigrator.cpp',
     'dsoftoperationswidget.h', 'dsoftoperationswidget.cpp',
+    'dsoftstatusapi.h', 'dsoftstatusapi.cpp',
     'dsoftruntime.cpp'
 )
 
@@ -33,12 +34,48 @@ if ($cmake -notmatch 'dsoftoperationswidget\.cpp') {
     }
     $cmake = $cmake.Replace($anchor, "$anchor`r`n        dsoftoperationswidget.h dsoftoperationswidget.cpp")
 }
+if ($cmake -notmatch 'dsoftstatusapi\.cpp') {
+    $anchor = 'dsoftoperationswidget.h dsoftoperationswidget.cpp'
+    if ($cmake -notmatch [regex]::Escape($anchor)) {
+        throw 'Could not locate operations widget source anchor in CMakeLists.txt.'
+    }
+    $cmake = $cmake.Replace($anchor, "$anchor`r`n        dsoftstatusapi.h dsoftstatusapi.cpp")
+}
 Set-Content $cmakePath $cmake -NoNewline -Encoding utf8
 
 $mainPath = Join-Path $sourceDir 'main.cpp'
 $main = Get-Content $mainPath -Raw
 if ($main -notmatch '#include "dsoftsingleinstance.h"') {
-    $main = $main.Replace('#include "messagesystem.h"', "#include `"messagesystem.h`"`r`n#include `"dsoftsingleinstance.h`"`r`n#include <QMessageBox>")
+    $main = $main.Replace('#include "messagesystem.h"', "#include `"messagesystem.h`"`r`n#include `"dsoftsingleinstance.h`"`r`n#include `"dsoftstatusapi.h`"`r`n#include <QMessageBox>")
+} elseif ($main -notmatch '#include "dsoftstatusapi.h"') {
+    $main = $main.Replace('#include "dsoftsingleinstance.h"', "#include `"dsoftsingleinstance.h`"`r`n#include `"dsoftstatusapi.h`"")
+}
+
+if ($main -notmatch '/dsoft/api/v1/printers') {
+    $routeAnchor = '.post("/hw_proxy/handshake",'
+    if ($main -notmatch [regex]::Escape($routeAnchor)) {
+        throw 'Could not locate handshake route in main.cpp.'
+    }
+    $routes = @'
+.get("/dsoft/api/v1/health",
+           [](auto *res, auto *) {
+             res->writeHeader("Content-Type", "application/json; charset=utf-8");
+             res->writeHeader("Access-Control-Allow-Origin", "*");
+             res->writeHeader("Cache-Control", "no-store");
+             res->writeHeader("Connection", "close");
+             res->end(DSoftStatusApi::healthJson());
+           })
+      .get("/dsoft/api/v1/printers",
+           [](auto *res, auto *) {
+             res->writeHeader("Content-Type", "application/json; charset=utf-8");
+             res->writeHeader("Access-Control-Allow-Origin", "*");
+             res->writeHeader("Cache-Control", "no-store");
+             res->writeHeader("Connection", "close");
+             res->end(DSoftStatusApi::printersJson());
+           })
+      .post("/hw_proxy/handshake",
+'@
+    $main = $main.Replace($routeAnchor, $routes.TrimEnd())
 }
 
 $oldApp = @'
@@ -98,11 +135,17 @@ Set-Content $mainWindowPath $mainWindow -NoNewline -Encoding utf8
 if (-not (Select-String $cmakePath -SimpleMatch 'dsoftoperationswidget.cpp' -Quiet)) {
     throw 'Operations widget files were not added to CMake.'
 }
+if (-not (Select-String $cmakePath -SimpleMatch 'dsoftstatusapi.cpp' -Quiet)) {
+    throw 'Status API files were not added to CMake.'
+}
 if (-not (Select-String $mainPath -SimpleMatch 'DSoftSingleInstance singleInstance' -Quiet)) {
     throw 'Single-instance guard was not installed in main.cpp.'
+}
+if (-not (Select-String $mainPath -SimpleMatch '/dsoft/api/v1/printers' -Quiet)) {
+    throw 'DSoft status API routes were not installed in main.cpp.'
 }
 if (-not (Select-String $mainWindowPath -SimpleMatch 'DSoft Operations' -Quiet)) {
     throw 'Operations dashboard was not installed in mainwindow.cpp.'
 }
 
-Write-Host 'Applied DSoft single-instance guard, migration, and operations dashboard.'
+Write-Host 'Applied DSoft single-instance guard, migration, operations dashboard, and status API.'
