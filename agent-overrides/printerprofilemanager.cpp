@@ -1,5 +1,6 @@
 #include "printerprofilemanager.h"
 
+#include <algorithm>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
