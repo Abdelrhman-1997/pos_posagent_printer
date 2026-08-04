@@ -9,8 +9,8 @@
 #include <QWriteLocker>
 
 namespace {
-constexpr auto kProfilesKey = "dsoft/printer_profiles_json";
-constexpr auto kDefaultProfileKey = "dsoft/default_printer_code";
+const QString kProfilesKey = QStringLiteral("dsoft/printer_profiles_json");
+const QString kDefaultProfileKey = QStringLiteral("dsoft/default_printer_code");
 }
 
 PrinterProfileManager::PrinterProfileManager(QSettings *settings)
@@ -39,8 +39,7 @@ bool PrinterProfileManager::profileByCode(const QString &code,
 
 QString PrinterProfileManager::defaultProfileCode() const {
   QReadLocker locker(&lock_);
-  return settings_->value(QStringLiteral(kDefaultProfileKey),
-                          QStringLiteral("default"))
+  return settings_->value(kDefaultProfileKey, QStringLiteral("default"))
       .toString();
 }
 
@@ -86,8 +85,8 @@ bool PrinterProfileManager::removeProfile(const QString &code,
     return false;
   }
 
-  if (settings_->value(QStringLiteral(kDefaultProfileKey)).toString() == code) {
-    settings_->setValue(QStringLiteral(kDefaultProfileKey),
+  if (settings_->value(kDefaultProfileKey).toString() == code) {
+    settings_->setValue(kDefaultProfileKey,
                         storedProfiles.isEmpty() ? QString()
                                                  : storedProfiles.first().code);
   }
@@ -106,7 +105,7 @@ bool PrinterProfileManager::setDefaultProfileCode(const QString &code,
       *errorMessage = QStringLiteral("Default printer profile does not exist.");
     return false;
   }
-  settings_->setValue(QStringLiteral(kDefaultProfileKey), code);
+  settings_->setValue(kDefaultProfileKey, code);
   settings_->sync();
   return settings_->status() == QSettings::NoError;
 }
@@ -135,14 +134,14 @@ bool PrinterProfileManager::migrateLegacySinglePrinter(
   if (!writeProfilesUnlocked(storedProfiles, errorMessage))
     return false;
 
-  settings_->setValue(QStringLiteral(kDefaultProfileKey), profile.code);
+  settings_->setValue(kDefaultProfileKey, profile.code);
   settings_->sync();
   return settings_->status() == QSettings::NoError;
 }
 
 QList<PrinterProfile> PrinterProfileManager::loadProfilesUnlocked() const {
   QList<PrinterProfile> profiles;
-  const QByteArray raw = settings_->value(QStringLiteral(kProfilesKey)).toByteArray();
+  const QByteArray raw = settings_->value(kProfilesKey).toByteArray();
   if (raw.isEmpty())
     return profiles;
 
@@ -170,7 +169,7 @@ bool PrinterProfileManager::writeProfilesUnlocked(
   for (const auto &profile : profiles)
     array.append(profile.toJson());
 
-  settings_->setValue(QStringLiteral(kProfilesKey),
+  settings_->setValue(kProfilesKey,
                       QJsonDocument(array).toJson(QJsonDocument::Compact));
   settings_->sync();
   if (settings_->status() != QSettings::NoError) {
