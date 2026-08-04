@@ -1,226 +1,58 @@
 $ErrorActionPreference = 'Stop'
 
 $sourceDir = Join-Path $PSScriptRoot '..\agent-src'
-$overrideDir = Join-Path $PSScriptRoot '..\agent-overrides'
 
 if (-not (Test-Path $sourceDir)) {
     throw "POSAgent source directory was not found: $sourceDir"
 }
-if (-not (Test-Path $overrideDir)) {
-    throw "Override directory was not found: $overrideDir"
-}
 
-$overrideFiles = @(
-    'printerprofile.h',
-    'printerprofile.cpp',
-    'printerprofilemanager.h',
-    'printerprofilemanager.cpp',
-    'printerroutingrequest.h',
-    'printerroutingrequest.cpp',
-    'dsoftprintjob.h',
-    'dsoftprintqueue.h',
-    'dsoftprintqueue.cpp',
-    'dsoftprinterservice.h',
-    'dsoftprinterservice.cpp',
-    'dsoftwindowsprinterdispatcher.h',
-    'dsoftwindowsprinterdispatcher.cpp',
-    'dsoftruntime.h',
-    'dsoftruntime.cpp',
-    'printerprofiledialog.h',
-    'printerprofiledialog.cpp',
-    'printermanagerwidget.h',
-    'printermanagerwidget.cpp',
-    'dsoftlogger.h',
-    'dsoftlogger.cpp',
-    'dsoftstartupmanager.h',
-    'dsoftstartupmanager.cpp',
-    'json.cpp'
-)
+$mainPath = Join-Path $sourceDir 'main.cpp'
+$main = Get-Content $mainPath -Raw
 
-foreach ($file in $overrideFiles) {
-    $source = Join-Path $overrideDir $file
-    $target = Join-Path $sourceDir $file
-    if (-not (Test-Path $source)) {
-        throw "Required override file is missing: $source"
+$appAnchor = 'QApplication a(argc, argv);'
+if ($main -notmatch 'setApplicationName\(QStringLiteral\("DSoft POS Printer Agent"\)\)') {
+    if ($main -notmatch [regex]::Escape($appAnchor)) {
+        throw 'Could not locate QApplication creation in main.cpp.'
     }
-    Copy-Item -Path $source -Destination $target -Force
-}
 
-$cmakePath = Join-Path $sourceDir 'CMakeLists.txt'
-$cmake = Get-Content $cmakePath -Raw
-$anchor = '        eventsystem.h printagent.qrc'
-$replacement = @'
-        eventsystem.h printagent.qrc
-        printerprofile.h printerprofile.cpp
-        printerprofilemanager.h printerprofilemanager.cpp
-        printerroutingrequest.h printerroutingrequest.cpp
-        dsoftprintjob.h dsoftprintqueue.h dsoftprintqueue.cpp
-        dsoftprinterservice.h dsoftprinterservice.cpp
-        dsoftwindowsprinterdispatcher.h dsoftwindowsprinterdispatcher.cpp
-        dsoftruntime.h dsoftruntime.cpp
-        printerprofiledialog.h printerprofiledialog.cpp
-        printermanagerwidget.h printermanagerwidget.cpp
-        dsoftlogger.h dsoftlogger.cpp
-        dsoftstartupmanager.h dsoftstartupmanager.cpp
+    $appReplacement = @'
+QApplication a(argc, argv);
+  a.setOrganizationName(QStringLiteral("DSoft"));
+  a.setApplicationName(QStringLiteral("DSoft POS Printer Agent"));
 '@
-
-if ($cmake -notmatch [regex]::Escape('dsoftstartupmanager.cpp')) {
-    if ($cmake -match [regex]::Escape('printermanagerwidget.cpp')) {
-        $cmake = [regex]::Replace(
-            $cmake,
-            'printermanagerwidget\.h\s+printermanagerwidget\.cpp',
-            "printermanagerwidget.h printermanagerwidget.cpp`r`n        dsoftlogger.h dsoftlogger.cpp`r`n        dsoftstartupmanager.h dsoftstartupmanager.cpp",
-            1
-        )
-    } elseif ($cmake -match [regex]::Escape('dsoftruntime.cpp')) {
-        $cmake = [regex]::Replace(
-            $cmake,
-            'dsoftruntime\.h\s+dsoftruntime\.cpp',
-            "dsoftruntime.h dsoftruntime.cpp`r`n        printerprofiledialog.h printerprofiledialog.cpp`r`n        printermanagerwidget.h printermanagerwidget.cpp`r`n        dsoftlogger.h dsoftlogger.cpp`r`n        dsoftstartupmanager.h dsoftstartupmanager.cpp",
-            1
-        )
-    } else {
-        if ($cmake -notmatch [regex]::Escape($anchor)) {
-            throw 'Could not locate PROJECT_SOURCES anchor in CMakeLists.txt.'
-        }
-        $cmake = $cmake.Replace($anchor, $replacement.TrimEnd())
-    }
-    Set-Content -Path $cmakePath -Value $cmake -NoNewline -Encoding utf8
+    $main = $main.Replace($appAnchor, $appReplacement.TrimEnd())
 }
+
+Set-Content -Path $mainPath -Value $main -NoNewline -Encoding utf8
 
 $mainWindowPath = Join-Path $sourceDir 'mainwindow.cpp'
 $mainWindow = Get-Content $mainWindowPath -Raw
 
-if ($mainWindow -notmatch '#include "dsoftruntime.h"') {
-    $includeAnchor = '#include "messagesystem.h"'
-    if ($mainWindow -notmatch [regex]::Escape($includeAnchor)) {
-        throw 'Could not locate messagesystem include in mainwindow.cpp.'
-    }
-    $mainWindow = $mainWindow.Replace(
-        $includeAnchor,
-        "$includeAnchor`r`n#include `"dsoftruntime.h`"`r`n#include `"printermanagerwidget.h`"`r`n#include `"dsoftlogger.h`"`r`n#include <QDockWidget>"
-    )
-} else {
-    if ($mainWindow -notmatch '#include "printermanagerwidget.h"') {
-        $mainWindow = $mainWindow.Replace(
-            '#include "dsoftruntime.h"',
-            "#include `"dsoftruntime.h`"`r`n#include `"printermanagerwidget.h`"`r`n#include <QDockWidget>"
-        )
-    }
-    if ($mainWindow -notmatch '#include "dsoftlogger.h"') {
-        $mainWindow = $mainWindow.Replace(
-            '#include "printermanagerwidget.h"',
-            "#include `"printermanagerwidget.h`"`r`n#include `"dsoftlogger.h`""
-        )
-    }
-}
-
-$oldRefresh = @'
-void MainWindow::refreshTimer() {
-  if (GlobalState::processQueue()) {
-    if (showpreview)
-      scheduleDiplayPreviewUpdate();
-  }
-
-  if (GlobalState::getPrinterStatus() == CONNECTED) {
-'@
-$newRefresh = @'
-void MainWindow::refreshTimer() {
-  bool processedDSoftJob = false;
-  DSoftJobResult dsoftResult;
-  while (DSoftRuntime::instance().processNext(&dsoftResult)) {
-    processedDSoftJob = true;
-    const QString logMessage = QStringLiteral("Job %1 [%2]: %3")
-        .arg(dsoftResult.sequence)
-        .arg(dsoftResult.printerCode, dsoftResult.message);
-    if (dsoftResult.success)
-      DSoftLogger::instance().info(logMessage);
-    else
-      DSoftLogger::instance().error(logMessage);
-  }
-
-  if (GlobalState::processQueue() || processedDSoftJob) {
-    if (showpreview)
-      scheduleDiplayPreviewUpdate();
-  }
-
-  if (GlobalState::getPrinterStatus() == CONNECTED) {
-'@
-
-if ($mainWindow -match [regex]::Escape('DSoftRuntime::instance().processNextJob()')) {
-    $mainWindow = $mainWindow.Replace(
-        'while (DSoftRuntime::instance().processNextJob())',
-        'DSoftJobResult dsoftResult;`r`n  while (DSoftRuntime::instance().processNext(&dsoftResult))'
-    )
-} elseif ($mainWindow -notmatch [regex]::Escape('DSoftRuntime::instance().processNext(&dsoftResult)')) {
-    if ($mainWindow -notmatch [regex]::Escape($oldRefresh.Trim())) {
-        throw 'Could not locate refreshTimer implementation in mainwindow.cpp.'
-    }
-    $mainWindow = $mainWindow.Replace($oldRefresh.Trim(), $newRefresh.Trim())
-} elseif ($mainWindow -notmatch [regex]::Escape('DSoftLogger::instance().info(logMessage)')) {
-    $simpleLoop = @'
-  DSoftJobResult dsoftResult;
-  while (DSoftRuntime::instance().processNext(&dsoftResult))
-    processedDSoftJob = true;
-'@
-    $loggedLoop = @'
-  DSoftJobResult dsoftResult;
-  while (DSoftRuntime::instance().processNext(&dsoftResult)) {
-    processedDSoftJob = true;
-    const QString logMessage = QStringLiteral("Job %1 [%2]: %3")
-        .arg(dsoftResult.sequence)
-        .arg(dsoftResult.printerCode, dsoftResult.message);
-    if (dsoftResult.success)
-      DSoftLogger::instance().info(logMessage);
-    else
-      DSoftLogger::instance().error(logMessage);
-  }
-'@
-    if ($mainWindow -match [regex]::Escape($simpleLoop.Trim())) {
-        $mainWindow = $mainWindow.Replace($simpleLoop.Trim(), $loggedLoop.Trim())
-    }
-}
-
-$mainWindow = $mainWindow.Replace('t->setInterval(100);', 't->setInterval(1000);')
-
-$uiAnchor = 'ui->setupUi(this);'
-if ($mainWindow -notmatch [regex]::Escape('DSoft Printer Management')) {
-    if ($mainWindow -notmatch [regex]::Escape($uiAnchor)) {
+$setupAnchor = 'ui->setupUi(this);'
+if ($mainWindow -notmatch 'setWindowTitle\(QStringLiteral\("DSoft POS Printer Agent"\)\)') {
+    if ($mainWindow -notmatch [regex]::Escape($setupAnchor)) {
         throw 'Could not locate setupUi call in mainwindow.cpp.'
     }
-    $panelCode = @'
+
+    $windowReplacement = @'
 ui->setupUi(this);
   setWindowTitle(QStringLiteral("DSoft POS Printer Agent"));
-
-  auto *printerDock = new QDockWidget(QStringLiteral("DSoft Printer Management"), this);
-  printerDock->setObjectName(QStringLiteral("dsoft_printer_management_dock"));
-  printerDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-  printerDock->setWidget(new PrinterManagerWidget(printerDock));
-  addDockWidget(Qt::RightDockWidgetArea, printerDock);
 '@
-    $mainWindow = $mainWindow.Replace($uiAnchor, $panelCode.TrimEnd())
+    $mainWindow = $mainWindow.Replace($setupAnchor, $windowReplacement.TrimEnd())
 }
+
+# Keep the original single-printer engine and slow the UI timer slightly to
+# reduce unnecessary CPU usage on low-spec customer terminals.
+$mainWindow = $mainWindow.Replace('t->setInterval(100);', 't->setInterval(500);')
 
 Set-Content -Path $mainWindowPath -Value $mainWindow -NoNewline -Encoding utf8
 
-foreach ($file in $overrideFiles) {
-    if (-not (Test-Path (Join-Path $sourceDir $file))) {
-        throw "Override was not copied into agent-src: $file"
-    }
+if (-not (Select-String -Path $mainPath -SimpleMatch 'DSoft POS Printer Agent' -Quiet)) {
+    throw 'DSoft application name was not applied.'
+}
+if (-not (Select-String -Path $mainWindowPath -SimpleMatch 'DSoft POS Printer Agent' -Quiet)) {
+    throw 'DSoft window title was not applied.'
 }
 
-if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftstartupmanager.cpp' -Quiet)) {
-    throw 'CMakeLists.txt was not updated with logging/startup services.'
-}
-if (-not (Select-String -Path $mainWindowPath -SimpleMatch 'DSoftRuntime::instance().processNext(&dsoftResult)' -Quiet)) {
-    throw 'mainwindow.cpp was not connected to the DSoft runtime.'
-}
-if (-not (Select-String -Path $mainWindowPath -SimpleMatch 'DSoft Printer Management' -Quiet)) {
-    throw 'mainwindow.cpp was not connected to the printer manager widget.'
-}
-if (-not (Select-String -Path (Join-Path $sourceDir 'json.cpp') -SimpleMatch 'enqueueReceipt' -Quiet)) {
-    throw 'json.cpp was not replaced with the routed implementation.'
-}
-
-Write-Host 'Applied DSoft routed printing, management UI, logging, and startup services.'
-Write-Host ('Integrated files: ' + ($overrideFiles -join ', '))
+Write-Host 'Applied minimal DSoft single-printer mode.'
+Write-Host 'No profiles, routing dashboard, login, queue service, startup manager, or extra status services were added.'
