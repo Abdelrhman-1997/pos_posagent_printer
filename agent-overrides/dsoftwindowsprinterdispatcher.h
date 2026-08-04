@@ -8,9 +8,14 @@
 #include <QString>
 #include <QStringList>
 
+#include <memory>
+
+class PrinterWindowsSpooler;
+
 class DSoftWindowsPrinterDispatcher {
 public:
   DSoftWindowsPrinterDispatcher();
+  ~DSoftWindowsPrinterDispatcher();
 
   bool dispatch(const PrinterProfile &profile, const DSoftPrintJob &job,
                 QString *errorMessage = nullptr);
@@ -26,6 +31,7 @@ private:
                           QString *errorMessage);
 
   mutable QMutex mutex_;
+  std::unique_ptr<PrinterWindowsSpooler> spooler_;
 };
 
 #endif // DSOFT_WINDOWSPRINTERDISPATCHER_H
