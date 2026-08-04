@@ -8,6 +8,7 @@ $files = @(
     'dsoftlegacymigrator.h', 'dsoftlegacymigrator.cpp',
     'dsoftoperationswidget.h', 'dsoftoperationswidget.cpp',
     'dsoftstatusapi.h', 'dsoftstatusapi.cpp',
+    'dsoftlogindialog.h', 'dsoftlogindialog.cpp',
     'dsoftruntime.cpp'
 )
 
@@ -41,14 +42,26 @@ if ($cmake -notmatch 'dsoftstatusapi\.cpp') {
     }
     $cmake = $cmake.Replace($anchor, "$anchor`r`n        dsoftstatusapi.h dsoftstatusapi.cpp")
 }
+if ($cmake -notmatch 'dsoftlogindialog\.cpp') {
+    $anchor = 'dsoftstatusapi.h dsoftstatusapi.cpp'
+    if ($cmake -notmatch [regex]::Escape($anchor)) {
+        throw 'Could not locate status API source anchor in CMakeLists.txt.'
+    }
+    $cmake = $cmake.Replace($anchor, "$anchor`r`n        dsoftlogindialog.h dsoftlogindialog.cpp")
+}
 Set-Content $cmakePath $cmake -NoNewline -Encoding utf8
 
 $mainPath = Join-Path $sourceDir 'main.cpp'
 $main = Get-Content $mainPath -Raw
 if ($main -notmatch '#include "dsoftsingleinstance.h"') {
-    $main = $main.Replace('#include "messagesystem.h"', "#include `"messagesystem.h`"`r`n#include `"dsoftsingleinstance.h`"`r`n#include `"dsoftstatusapi.h`"`r`n#include <QMessageBox>")
-} elseif ($main -notmatch '#include "dsoftstatusapi.h"') {
-    $main = $main.Replace('#include "dsoftsingleinstance.h"', "#include `"dsoftsingleinstance.h`"`r`n#include `"dsoftstatusapi.h`"")
+    $main = $main.Replace('#include "messagesystem.h"', "#include `"messagesystem.h`"`r`n#include `"dsoftsingleinstance.h`"`r`n#include `"dsoftstatusapi.h`"`r`n#include `"dsoftlogindialog.h`"`r`n#include <QMessageBox>")
+} else {
+    if ($main -notmatch '#include "dsoftstatusapi.h"') {
+        $main = $main.Replace('#include "dsoftsingleinstance.h"', "#include `"dsoftsingleinstance.h`"`r`n#include `"dsoftstatusapi.h`"")
+    }
+    if ($main -notmatch '#include "dsoftlogindialog.h"') {
+        $main = $main.Replace('#include "dsoftstatusapi.h"', "#include `"dsoftstatusapi.h`"`r`n#include `"dsoftlogindialog.h`"")
+    }
 }
 
 if ($main -notmatch '/dsoft/api/v1/printers') {
@@ -95,6 +108,10 @@ $newApp = @'
     return 0;
   }
 
+  DSoftLoginDialog loginDialog;
+  if (loginDialog.exec() != QDialog::Accepted)
+    return 0;
+
   MainWindow w;
 '@
 if ($main -notmatch 'DSoftSingleInstance singleInstance') {
@@ -102,6 +119,19 @@ if ($main -notmatch 'DSoftSingleInstance singleInstance') {
         throw 'Could not locate QApplication/MainWindow block in main.cpp.'
     }
     $main = $main.Replace($oldApp.Trim(), $newApp.Trim())
+} elseif ($main -notmatch 'DSoftLoginDialog loginDialog') {
+    $anchor = '  MainWindow w;'
+    if ($main -notmatch [regex]::Escape($anchor)) {
+        throw 'Could not locate MainWindow construction in main.cpp.'
+    }
+    $loginBlock = @'
+  DSoftLoginDialog loginDialog;
+  if (loginDialog.exec() != QDialog::Accepted)
+    return 0;
+
+  MainWindow w;
+'@
+    $main = $main.Replace($anchor, $loginBlock.TrimEnd())
 }
 Set-Content $mainPath $main -NoNewline -Encoding utf8
 
@@ -138,8 +168,14 @@ if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftoperationswidget.cpp
 if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftstatusapi.cpp' -Quiet)) {
     throw 'Status API files were not added to CMake.'
 }
+if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftlogindialog.cpp' -Quiet)) {
+    throw 'Login dialog files were not added to CMake.'
+}
 if (-not (Select-String -Path $mainPath -SimpleMatch 'DSoftSingleInstance singleInstance' -Quiet)) {
     throw 'Single-instance guard was not installed in main.cpp.'
+}
+if (-not (Select-String -Path $mainPath -SimpleMatch 'DSoftLoginDialog loginDialog' -Quiet)) {
+    throw 'Admin login was not installed in main.cpp.'
 }
 if (-not (Select-String -Path $mainPath -SimpleMatch '/dsoft/api/v1/printers' -Quiet)) {
     throw 'DSoft status API routes were not installed in main.cpp.'
@@ -148,4 +184,4 @@ if (-not (Select-String -Path $mainWindowPath -SimpleMatch 'DSoft Operations' -Q
     throw 'Operations dashboard was not installed in mainwindow.cpp.'
 }
 
-Write-Host 'Applied DSoft single-instance guard, migration, operations dashboard, and status API.'
+Write-Host 'Applied DSoft single-instance guard, fixed admin login, migration, operations dashboard, and status API.'
