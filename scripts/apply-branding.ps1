@@ -29,10 +29,10 @@ a.setApplicationName(QStringLiteral("DSoft POS Printer Agent"));
     Set-Content $mainPath $main -NoNewline -Encoding utf8
 }
 
-if (-not (Select-String $resourceTarget -SimpleMatch 'DSoft POS Printer Agent' -Quiet)) {
+if (-not (Select-String -Path $resourceTarget -SimpleMatch 'DSoft POS Printer Agent' -Quiet)) {
     throw 'Windows resource branding was not applied.'
 }
-if (-not (Select-String $mainPath -SimpleMatch 'setApplicationVersion(QStringLiteral("1.0.0"))' -Quiet)) {
+if (-not (Select-String -Path $mainPath -SimpleMatch 'setApplicationVersion(QStringLiteral("1.0.0"))' -Quiet)) {
     throw 'Qt application branding was not applied.'
 }
 
