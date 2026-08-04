@@ -16,7 +16,10 @@ $overrideFiles = @(
     'printerprofilemanager.h',
     'printerprofilemanager.cpp',
     'printerroutingrequest.h',
-    'printerroutingrequest.cpp'
+    'printerroutingrequest.cpp',
+    'dsoftprintjob.h',
+    'dsoftprintqueue.h',
+    'dsoftprintqueue.cpp'
 )
 
 foreach ($file in $overrideFiles) {
@@ -36,13 +39,23 @@ $replacement = @'
         printerprofile.h printerprofile.cpp
         printerprofilemanager.h printerprofilemanager.cpp
         printerroutingrequest.h printerroutingrequest.cpp
+        dsoftprintjob.h dsoftprintqueue.h dsoftprintqueue.cpp
 '@
 
-if ($cmake -notmatch [regex]::Escape('printerprofilemanager.cpp')) {
-    if ($cmake -notmatch [regex]::Escape($anchor)) {
-        throw 'Could not locate PROJECT_SOURCES anchor in CMakeLists.txt.'
+if ($cmake -notmatch [regex]::Escape('dsoftprintqueue.cpp')) {
+    if ($cmake -match [regex]::Escape('printerprofilemanager.cpp')) {
+        $cmake = [regex]::Replace(
+            $cmake,
+            'printerroutingrequest\.h\s+printerroutingrequest\.cpp',
+            "printerroutingrequest.h printerroutingrequest.cpp`r`n        dsoftprintjob.h dsoftprintqueue.h dsoftprintqueue.cpp",
+            1
+        )
+    } else {
+        if ($cmake -notmatch [regex]::Escape($anchor)) {
+            throw 'Could not locate PROJECT_SOURCES anchor in CMakeLists.txt.'
+        }
+        $cmake = $cmake.Replace($anchor, $replacement.TrimEnd())
     }
-    $cmake = $cmake.Replace($anchor, $replacement.TrimEnd())
     Set-Content -Path $cmakePath -Value $cmake -NoNewline -Encoding utf8
 }
 
@@ -52,8 +65,8 @@ foreach ($file in $overrideFiles) {
     }
 }
 
-if (-not (Select-String -Path $cmakePath -SimpleMatch 'printerroutingrequest.cpp' -Quiet)) {
-    throw 'CMakeLists.txt was not updated with DSoft routing sources.'
+if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftprintqueue.cpp' -Quiet)) {
+    throw 'CMakeLists.txt was not updated with DSoft routed queue sources.'
 }
 
 Write-Host 'Applied DSoft multi-printer foundation sources.'
