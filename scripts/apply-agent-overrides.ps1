@@ -23,7 +23,9 @@ $overrideFiles = @(
     'dsoftprinterservice.h',
     'dsoftprinterservice.cpp',
     'dsoftwindowsprinterdispatcher.h',
-    'dsoftwindowsprinterdispatcher.cpp'
+    'dsoftwindowsprinterdispatcher.cpp',
+    'dsoftruntime.h',
+    'dsoftruntime.cpp'
 )
 
 foreach ($file in $overrideFiles) {
@@ -46,21 +48,22 @@ $replacement = @'
         dsoftprintjob.h dsoftprintqueue.h dsoftprintqueue.cpp
         dsoftprinterservice.h dsoftprinterservice.cpp
         dsoftwindowsprinterdispatcher.h dsoftwindowsprinterdispatcher.cpp
+        dsoftruntime.h dsoftruntime.cpp
 '@
 
-if ($cmake -notmatch [regex]::Escape('dsoftwindowsprinterdispatcher.cpp')) {
-    if ($cmake -match [regex]::Escape('dsoftprinterservice.cpp')) {
+if ($cmake -notmatch [regex]::Escape('dsoftruntime.cpp')) {
+    if ($cmake -match [regex]::Escape('dsoftwindowsprinterdispatcher.cpp')) {
+        $cmake = [regex]::Replace(
+            $cmake,
+            'dsoftwindowsprinterdispatcher\.h\s+dsoftwindowsprinterdispatcher\.cpp',
+            "dsoftwindowsprinterdispatcher.h dsoftwindowsprinterdispatcher.cpp`r`n        dsoftruntime.h dsoftruntime.cpp",
+            1
+        )
+    } elseif ($cmake -match [regex]::Escape('dsoftprinterservice.cpp')) {
         $cmake = [regex]::Replace(
             $cmake,
             'dsoftprinterservice\.h\s+dsoftprinterservice\.cpp',
-            "dsoftprinterservice.h dsoftprinterservice.cpp`r`n        dsoftwindowsprinterdispatcher.h dsoftwindowsprinterdispatcher.cpp",
-            1
-        )
-    } elseif ($cmake -match [regex]::Escape('dsoftprintqueue.cpp')) {
-        $cmake = [regex]::Replace(
-            $cmake,
-            'dsoftprintjob\.h\s+dsoftprintqueue\.h\s+dsoftprintqueue\.cpp',
-            "dsoftprintjob.h dsoftprintqueue.h dsoftprintqueue.cpp`r`n        dsoftprinterservice.h dsoftprinterservice.cpp`r`n        dsoftwindowsprinterdispatcher.h dsoftwindowsprinterdispatcher.cpp",
+            "dsoftprinterservice.h dsoftprinterservice.cpp`r`n        dsoftwindowsprinterdispatcher.h dsoftwindowsprinterdispatcher.cpp`r`n        dsoftruntime.h dsoftruntime.cpp",
             1
         )
     } else {
@@ -78,9 +81,9 @@ foreach ($file in $overrideFiles) {
     }
 }
 
-if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftwindowsprinterdispatcher.cpp' -Quiet)) {
+if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftruntime.cpp' -Quiet)) {
     throw 'CMakeLists.txt was not updated with all DSoft sources.'
 }
 
-Write-Host 'Applied DSoft multi-printer foundation sources.'
+Write-Host 'Applied DSoft multi-printer runtime sources.'
 Write-Host ('Integrated files: ' + ($overrideFiles -join ', '))
