@@ -6,6 +6,7 @@ $overrideDir = Join-Path $PSScriptRoot '..\agent-overrides'
 $files = @(
     'dsoftsingleinstance.h', 'dsoftsingleinstance.cpp',
     'dsoftlegacymigrator.h', 'dsoftlegacymigrator.cpp',
+    'dsoftoperationswidget.h', 'dsoftoperationswidget.cpp',
     'dsoftruntime.cpp'
 )
 
@@ -24,8 +25,15 @@ if ($cmake -notmatch 'dsoftsingleinstance\.cpp') {
     }
     $replacement = "$anchor`r`n        dsoftsingleinstance.h dsoftsingleinstance.cpp`r`n        dsoftlegacymigrator.h dsoftlegacymigrator.cpp"
     $cmake = $cmake.Replace($anchor, $replacement)
-    Set-Content $cmakePath $cmake -NoNewline -Encoding utf8
 }
+if ($cmake -notmatch 'dsoftoperationswidget\.cpp') {
+    $anchor = 'dsoftlegacymigrator.h dsoftlegacymigrator.cpp'
+    if ($cmake -notmatch [regex]::Escape($anchor)) {
+        throw 'Could not locate legacy migrator source anchor in CMakeLists.txt.'
+    }
+    $cmake = $cmake.Replace($anchor, "$anchor`r`n        dsoftoperationswidget.h dsoftoperationswidget.cpp")
+}
+Set-Content $cmakePath $cmake -NoNewline -Encoding utf8
 
 $mainPath = Join-Path $sourceDir 'main.cpp'
 $main = Get-Content $mainPath -Raw
@@ -33,7 +41,6 @@ if ($main -notmatch '#include "dsoftsingleinstance.h"') {
     $main = $main.Replace('#include "messagesystem.h"', "#include `"messagesystem.h`"`r`n#include `"dsoftsingleinstance.h`"`r`n#include <QMessageBox>")
 }
 
-# Replace the fragile process-name comparison with a lock file after QApplication exists.
 $oldApp = @'
   QApplication a(argc, argv);
   MainWindow w;
@@ -61,11 +68,41 @@ if ($main -notmatch 'DSoftSingleInstance singleInstance') {
 }
 Set-Content $mainPath $main -NoNewline -Encoding utf8
 
-if (-not (Select-String $cmakePath -SimpleMatch 'dsoftlegacymigrator.cpp' -Quiet)) {
-    throw 'Final runtime files were not added to CMake.'
+$mainWindowPath = Join-Path $sourceDir 'mainwindow.cpp'
+$mainWindow = Get-Content $mainWindowPath -Raw
+if ($mainWindow -notmatch '#include "dsoftoperationswidget.h"') {
+    $anchor = '#include "printermanagerwidget.h"'
+    if ($mainWindow -notmatch [regex]::Escape($anchor)) {
+        throw 'Could not locate printer manager include in mainwindow.cpp.'
+    }
+    $mainWindow = $mainWindow.Replace($anchor, "$anchor`r`n#include `"dsoftoperationswidget.h`"")
+}
+if ($mainWindow -notmatch 'DSoft Operations') {
+    $anchor = 'addDockWidget(Qt::RightDockWidgetArea, printerDock);'
+    if ($mainWindow -notmatch [regex]::Escape($anchor)) {
+        throw 'Could not locate printer management dock in mainwindow.cpp.'
+    }
+    $operationsDock = @'
+addDockWidget(Qt::RightDockWidgetArea, printerDock);
+
+  auto *operationsDock = new QDockWidget(QStringLiteral("DSoft Operations"), this);
+  operationsDock->setObjectName(QStringLiteral("dsoft_operations_dock"));
+  operationsDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::RightDockWidgetArea);
+  operationsDock->setWidget(new DSoftOperationsWidget(operationsDock));
+  addDockWidget(Qt::BottomDockWidgetArea, operationsDock);
+'@
+    $mainWindow = $mainWindow.Replace($anchor, $operationsDock.TrimEnd())
+}
+Set-Content $mainWindowPath $mainWindow -NoNewline -Encoding utf8
+
+if (-not (Select-String $cmakePath -SimpleMatch 'dsoftoperationswidget.cpp' -Quiet)) {
+    throw 'Operations widget files were not added to CMake.'
 }
 if (-not (Select-String $mainPath -SimpleMatch 'DSoftSingleInstance singleInstance' -Quiet)) {
     throw 'Single-instance guard was not installed in main.cpp.'
 }
+if (-not (Select-String $mainWindowPath -SimpleMatch 'DSoft Operations' -Quiet)) {
+    throw 'Operations dashboard was not installed in mainwindow.cpp.'
+}
 
-Write-Host 'Applied DSoft single-instance guard and legacy migration.'
+Write-Host 'Applied DSoft single-instance guard, migration, and operations dashboard.'
