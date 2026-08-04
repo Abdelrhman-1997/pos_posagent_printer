@@ -130,7 +130,10 @@ bool DSoftWindowsPrinterDispatcher::dispatchCashDrawer(
       *errorMessage = QStringLiteral("Cash drawer is disabled for this printer profile.");
     return false;
   }
-  const bool submitted = spooler_->openCashDrawer();
+
+  // ESC/POS: ESC p m t1 t2. Use pin 2 with a short pulse.
+  const std::string command("\x1B\x70\x00\x19\xFA", 5);
+  const bool submitted = spooler_->send_raw(command);
   if (!submitted && errorMessage)
     *errorMessage = QStringLiteral("Cash drawer command failed.");
   return submitted;
