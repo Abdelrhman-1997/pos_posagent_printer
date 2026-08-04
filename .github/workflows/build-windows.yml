@@ -1,4 +1,4 @@
-name: Build POSAgent Windows x64
+name: Build DSoft POS Printer Agent Windows x64
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: posagent-windows-${{ github.ref }}
+  group: dsoft-pos-printer-agent-windows-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -59,23 +59,12 @@ jobs:
             Set-Content -Path $header -Value $text -NoNewline -Encoding utf8
           }
 
-          $resource = 'agent-src\posagent_resource.rc'
-          $iconPath = (Resolve-Path 'agent-src\images\printagent_icon_big.ico').Path
-          $escapedIconPath = $iconPath.Replace('\', '\\')
-          $resourceText = Get-Content $resource -Raw
-          $pattern = 'IDI_ICON1\s+ICON\s+"[^"]+"'
-          $replacement = "IDI_ICON1`tICON`t`"$escapedIconPath`""
-          $updated = [regex]::Replace($resourceText, $pattern, $replacement, 1)
-          if ($updated -eq $resourceText) {
-            throw 'Could not replace the hardcoded icon path.'
-          }
-          Set-Content -Path $resource -Value $updated -NoNewline -Encoding ascii
-
-      - name: Integrate DSoft multi-printer sources
+      - name: Integrate DSoft sources and branding
         shell: pwsh
         run: |
           & '.\scripts\apply-agent-overrides.ps1'
           & '.\scripts\apply-final-runtime.ps1'
+          & '.\scripts\apply-branding.ps1'
 
       - name: Install Qt 6.5.2 MSVC x64
         uses: jurplel/install-qt-action@v4
@@ -136,16 +125,16 @@ jobs:
         id: package
         shell: pwsh
         run: |
-          $packageDir = Join-Path $PWD 'package\posagent-win64-dev'
+          $packageDir = Join-Path $PWD 'package\DSoft-POS-Printer-Agent-win64'
           New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
-          Copy-Item '${{ steps.locate.outputs.exe_path }}' (Join-Path $packageDir 'posagent-win64-dev.exe')
+          Copy-Item '${{ steps.locate.outputs.exe_path }}' (Join-Path $packageDir 'DSoftPOSPrinterAgent.exe')
           "package_dir=$packageDir" >> $env:GITHUB_OUTPUT
 
       - name: Deploy Qt runtime
         shell: pwsh
         run: |
           $windeployqt = 'C:\Qt\6.5.2\msvc2019_64\bin\windeployqt.exe'
-          $exe = Join-Path '${{ steps.package.outputs.package_dir }}' 'posagent-win64-dev.exe'
+          $exe = Join-Path '${{ steps.package.outputs.package_dir }}' 'DSoftPOSPrinterAgent.exe'
           & $windeployqt --release --compiler-runtime $exe 2>&1 | Tee-Object -FilePath windeployqt.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -171,7 +160,7 @@ jobs:
         shell: pwsh
         continue-on-error: true
         run: |
-          $exe = Join-Path '${{ steps.package.outputs.package_dir }}' 'posagent-win64-dev.exe'
+          $exe = Join-Path '${{ steps.package.outputs.package_dir }}' 'DSoftPOSPrinterAgent.exe'
           $process = Start-Process -FilePath $exe -PassThru
           Start-Sleep -Seconds 5
           if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
@@ -179,9 +168,9 @@ jobs:
       - name: Create ZIP and checksums
         shell: pwsh
         run: |
-          Compress-Archive -Path '${{ steps.package.outputs.package_dir }}\*' -DestinationPath 'posagent-win64-dev.zip' -Force
-          $hash = (Get-FileHash -Algorithm SHA256 'posagent-win64-dev.zip').Hash
-          "$hash  posagent-win64-dev.zip" | Out-File 'SHA256SUMS.txt' -Encoding ascii
+          Compress-Archive -Path '${{ steps.package.outputs.package_dir }}\*' -DestinationPath 'DSoft-POS-Printer-Agent-win64.zip' -Force
+          $hash = (Get-FileHash -Algorithm SHA256 'DSoft-POS-Printer-Agent-win64.zip').Hash
+          "$hash  DSoft-POS-Printer-Agent-win64.zip" | Out-File 'SHA256SUMS.txt' -Encoding ascii
 
       - name: Create build summary
         shell: pwsh
@@ -189,23 +178,28 @@ jobs:
           @"
           DSoft POS Printer Agent Windows build
           =====================================
+          Version: 1.0.0
           Upstream commit: ${{ steps.source.outputs.commit }}
           Runner: windows-2022
           Qt: 6.5.2 win64_msvc2019_64
-          Included foundation:
-          - persistent multi-printer profiles
+          Included:
+          - persistent multi-printer profiles and routing
+          - Windows spooler dispatcher
           - legacy single-printer migration
           - single-instance lock
-          - backward-compatible printer_code request parsing
-          Artifact: posagent-win64-dev.zip
+          - logs and recent jobs dashboard
+          - start with Windows control
+          - printer health/status API
+          - DSoft Windows metadata and packaging
+          Artifact: DSoft-POS-Printer-Agent-win64.zip
           "@ | Out-File 'build-summary.txt' -Encoding utf8
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: posagent-win64-dev
+          name: DSoft-POS-Printer-Agent-win64
           path: |
-            posagent-win64-dev.zip
+            DSoft-POS-Printer-Agent-win64.zip
             SHA256SUMS.txt
             build-summary.txt
             configure.log
