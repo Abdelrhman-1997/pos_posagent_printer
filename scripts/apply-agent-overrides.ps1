@@ -30,6 +30,10 @@ $overrideFiles = @(
     'printerprofiledialog.cpp',
     'printermanagerwidget.h',
     'printermanagerwidget.cpp',
+    'dsoftlogger.h',
+    'dsoftlogger.cpp',
+    'dsoftstartupmanager.h',
+    'dsoftstartupmanager.cpp',
     'json.cpp'
 )
 
@@ -56,14 +60,23 @@ $replacement = @'
         dsoftruntime.h dsoftruntime.cpp
         printerprofiledialog.h printerprofiledialog.cpp
         printermanagerwidget.h printermanagerwidget.cpp
+        dsoftlogger.h dsoftlogger.cpp
+        dsoftstartupmanager.h dsoftstartupmanager.cpp
 '@
 
-if ($cmake -notmatch [regex]::Escape('printermanagerwidget.cpp')) {
-    if ($cmake -match [regex]::Escape('dsoftruntime.cpp')) {
+if ($cmake -notmatch [regex]::Escape('dsoftstartupmanager.cpp')) {
+    if ($cmake -match [regex]::Escape('printermanagerwidget.cpp')) {
+        $cmake = [regex]::Replace(
+            $cmake,
+            'printermanagerwidget\.h\s+printermanagerwidget\.cpp',
+            "printermanagerwidget.h printermanagerwidget.cpp`r`n        dsoftlogger.h dsoftlogger.cpp`r`n        dsoftstartupmanager.h dsoftstartupmanager.cpp",
+            1
+        )
+    } elseif ($cmake -match [regex]::Escape('dsoftruntime.cpp')) {
         $cmake = [regex]::Replace(
             $cmake,
             'dsoftruntime\.h\s+dsoftruntime\.cpp',
-            "dsoftruntime.h dsoftruntime.cpp`r`n        printerprofiledialog.h printerprofiledialog.cpp`r`n        printermanagerwidget.h printermanagerwidget.cpp",
+            "dsoftruntime.h dsoftruntime.cpp`r`n        printerprofiledialog.h printerprofiledialog.cpp`r`n        printermanagerwidget.h printermanagerwidget.cpp`r`n        dsoftlogger.h dsoftlogger.cpp`r`n        dsoftstartupmanager.h dsoftstartupmanager.cpp",
             1
         )
     } else {
@@ -85,13 +98,21 @@ if ($mainWindow -notmatch '#include "dsoftruntime.h"') {
     }
     $mainWindow = $mainWindow.Replace(
         $includeAnchor,
-        "$includeAnchor`r`n#include `"dsoftruntime.h`"`r`n#include `"printermanagerwidget.h`"`r`n#include <QDockWidget>"
+        "$includeAnchor`r`n#include `"dsoftruntime.h`"`r`n#include `"printermanagerwidget.h`"`r`n#include `"dsoftlogger.h`"`r`n#include <QDockWidget>"
     )
-} elseif ($mainWindow -notmatch '#include "printermanagerwidget.h"') {
-    $mainWindow = $mainWindow.Replace(
-        '#include "dsoftruntime.h"',
-        "#include `"dsoftruntime.h`"`r`n#include `"printermanagerwidget.h`"`r`n#include <QDockWidget>"
-    )
+} else {
+    if ($mainWindow -notmatch '#include "printermanagerwidget.h"') {
+        $mainWindow = $mainWindow.Replace(
+            '#include "dsoftruntime.h"',
+            "#include `"dsoftruntime.h`"`r`n#include `"printermanagerwidget.h`"`r`n#include <QDockWidget>"
+        )
+    }
+    if ($mainWindow -notmatch '#include "dsoftlogger.h"') {
+        $mainWindow = $mainWindow.Replace(
+            '#include "printermanagerwidget.h"',
+            "#include `"printermanagerwidget.h`"`r`n#include `"dsoftlogger.h`""
+        )
+    }
 }
 
 $oldRefresh = @'
@@ -107,8 +128,16 @@ $newRefresh = @'
 void MainWindow::refreshTimer() {
   bool processedDSoftJob = false;
   DSoftJobResult dsoftResult;
-  while (DSoftRuntime::instance().processNext(&dsoftResult))
+  while (DSoftRuntime::instance().processNext(&dsoftResult)) {
     processedDSoftJob = true;
+    const QString logMessage = QStringLiteral("Job %1 [%2]: %3")
+        .arg(dsoftResult.sequence)
+        .arg(dsoftResult.printerCode, dsoftResult.message);
+    if (dsoftResult.success)
+      DSoftLogger::instance().info(logMessage);
+    else
+      DSoftLogger::instance().error(logMessage);
+  }
 
   if (GlobalState::processQueue() || processedDSoftJob) {
     if (showpreview)
@@ -128,11 +157,32 @@ if ($mainWindow -match [regex]::Escape('DSoftRuntime::instance().processNextJob(
         throw 'Could not locate refreshTimer implementation in mainwindow.cpp.'
     }
     $mainWindow = $mainWindow.Replace($oldRefresh.Trim(), $newRefresh.Trim())
+} elseif ($mainWindow -notmatch [regex]::Escape('DSoftLogger::instance().info(logMessage)')) {
+    $simpleLoop = @'
+  DSoftJobResult dsoftResult;
+  while (DSoftRuntime::instance().processNext(&dsoftResult))
+    processedDSoftJob = true;
+'@
+    $loggedLoop = @'
+  DSoftJobResult dsoftResult;
+  while (DSoftRuntime::instance().processNext(&dsoftResult)) {
+    processedDSoftJob = true;
+    const QString logMessage = QStringLiteral("Job %1 [%2]: %3")
+        .arg(dsoftResult.sequence)
+        .arg(dsoftResult.printerCode, dsoftResult.message);
+    if (dsoftResult.success)
+      DSoftLogger::instance().info(logMessage);
+    else
+      DSoftLogger::instance().error(logMessage);
+  }
+'@
+    if ($mainWindow -match [regex]::Escape($simpleLoop.Trim())) {
+        $mainWindow = $mainWindow.Replace($simpleLoop.Trim(), $loggedLoop.Trim())
+    }
 }
 
 $mainWindow = $mainWindow.Replace('t->setInterval(100);', 't->setInterval(1000);')
 
-# Add the professional printer-management panel without changing the upstream .ui file.
 $uiAnchor = 'ui->setupUi(this);'
 if ($mainWindow -notmatch [regex]::Escape('DSoft Printer Management')) {
     if ($mainWindow -notmatch [regex]::Escape($uiAnchor)) {
@@ -159,8 +209,8 @@ foreach ($file in $overrideFiles) {
     }
 }
 
-if (-not (Select-String -Path $cmakePath -SimpleMatch 'printermanagerwidget.cpp' -Quiet)) {
-    throw 'CMakeLists.txt was not updated with the printer management UI.'
+if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftstartupmanager.cpp' -Quiet)) {
+    throw 'CMakeLists.txt was not updated with logging/startup services.'
 }
 if (-not (Select-String -Path $mainWindowPath -SimpleMatch 'DSoftRuntime::instance().processNext(&dsoftResult)' -Quiet)) {
     throw 'mainwindow.cpp was not connected to the DSoft runtime.'
@@ -172,5 +222,5 @@ if (-not (Select-String -Path (Join-Path $sourceDir 'json.cpp') -SimpleMatch 'en
     throw 'json.cpp was not replaced with the routed implementation.'
 }
 
-Write-Host 'Applied DSoft routed printing and printer-management UI.'
+Write-Host 'Applied DSoft routed printing, management UI, logging, and startup services.'
 Write-Host ('Integrated files: ' + ($overrideFiles -join ', '))
