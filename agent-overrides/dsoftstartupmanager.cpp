@@ -7,9 +7,9 @@
 #include <QStandardPaths>
 
 namespace {
-constexpr auto kRunRegistryPath =
-    "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-constexpr auto kRunValueName = "DSoft POS Printer Agent";
+const QString kRunRegistryPath = QStringLiteral(
+    "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+const QString kRunValueName = QStringLiteral("DSoft POS Printer Agent");
 }
 
 QString DSoftStartupManager::startupShortcutPath() {
@@ -20,8 +20,7 @@ QString DSoftStartupManager::startupShortcutPath() {
 bool DSoftStartupManager::setStartWithWindows(bool enabled,
                                               QString *errorMessage) {
 #ifdef Q_OS_WIN
-  QSettings runSettings(QStringLiteral(kRunRegistryPath),
-                        QSettings::NativeFormat);
+  QSettings runSettings(kRunRegistryPath, QSettings::NativeFormat);
   if (enabled) {
     const QString executable = QDir::toNativeSeparators(
         QCoreApplication::applicationFilePath());
@@ -30,10 +29,10 @@ bool DSoftStartupManager::setStartWithWindows(bool enabled,
         *errorMessage = QStringLiteral("Application executable path is empty.");
       return false;
     }
-    runSettings.setValue(QStringLiteral(kRunValueName),
+    runSettings.setValue(kRunValueName,
                          QStringLiteral("\"%1\" --minimized").arg(executable));
   } else {
-    runSettings.remove(QStringLiteral(kRunValueName));
+    runSettings.remove(kRunValueName);
   }
   runSettings.sync();
   if (runSettings.status() != QSettings::NoError) {
@@ -52,9 +51,8 @@ bool DSoftStartupManager::setStartWithWindows(bool enabled,
 
 bool DSoftStartupManager::startWithWindowsEnabled() {
 #ifdef Q_OS_WIN
-  QSettings runSettings(QStringLiteral(kRunRegistryPath),
-                        QSettings::NativeFormat);
-  return runSettings.contains(QStringLiteral(kRunValueName));
+  QSettings runSettings(kRunRegistryPath, QSettings::NativeFormat);
+  return runSettings.contains(kRunValueName);
 #else
   return false;
 #endif
