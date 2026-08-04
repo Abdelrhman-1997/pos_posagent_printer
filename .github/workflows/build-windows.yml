@@ -75,6 +75,7 @@ jobs:
         shell: pwsh
         run: |
           & '.\scripts\apply-agent-overrides.ps1'
+          & '.\scripts\apply-final-runtime.ps1'
 
       - name: Install Qt 6.5.2 MSVC x64
         uses: jurplel/install-qt-action@v4
@@ -194,6 +195,7 @@ jobs:
           Included foundation:
           - persistent multi-printer profiles
           - legacy single-printer migration
+          - single-instance lock
           - backward-compatible printer_code request parsing
           Artifact: posagent-win64-dev.zip
           "@ | Out-File 'build-summary.txt' -Encoding utf8
