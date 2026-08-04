@@ -1,5 +1,8 @@
 #include "dsoftruntime.h"
 
+#include "dsoftlegacymigrator.h"
+#include "dsoftlogger.h"
+
 DSoftRuntime &DSoftRuntime::instance() {
   static DSoftRuntime runtime;
   return runtime;
@@ -8,7 +11,16 @@ DSoftRuntime &DSoftRuntime::instance() {
 DSoftRuntime::DSoftRuntime()
     : settings_(QStringLiteral("DSoft"),
                 QStringLiteral("DSoft POS Printer Agent")),
-      printerService_(&settings_) {}
+      printerService_(&settings_) {
+  QString migrationMessage;
+  if (!DSoftLegacyMigrator::migrateIfNeeded(printerService_.profileManager(),
+                                             &migrationMessage)) {
+    DSoftLogger::instance().error(
+        QStringLiteral("Legacy migration failed: %1").arg(migrationMessage));
+  } else if (!migrationMessage.isEmpty()) {
+    DSoftLogger::instance().info(migrationMessage);
+  }
+}
 
 DSoftPrinterService &DSoftRuntime::printerService() {
   return printerService_;
