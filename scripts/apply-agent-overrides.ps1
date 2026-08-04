@@ -25,7 +25,8 @@ $overrideFiles = @(
     'dsoftwindowsprinterdispatcher.h',
     'dsoftwindowsprinterdispatcher.cpp',
     'dsoftruntime.h',
-    'dsoftruntime.cpp'
+    'dsoftruntime.cpp',
+    'json.cpp'
 )
 
 foreach ($file in $overrideFiles) {
@@ -75,6 +76,53 @@ if ($cmake -notmatch [regex]::Escape('dsoftruntime.cpp')) {
     Set-Content -Path $cmakePath -Value $cmake -NoNewline -Encoding utf8
 }
 
+# Process the routed queue immediately when a network request wakes the UI.
+$mainWindowPath = Join-Path $sourceDir 'mainwindow.cpp'
+$mainWindow = Get-Content $mainWindowPath -Raw
+if ($mainWindow -notmatch '#include "dsoftruntime.h"') {
+    $includeAnchor = '#include "messagesystem.h"'
+    if ($mainWindow -notmatch [regex]::Escape($includeAnchor)) {
+        throw 'Could not locate messagesystem include in mainwindow.cpp.'
+    }
+    $mainWindow = $mainWindow.Replace(
+        $includeAnchor,
+        "$includeAnchor`r`n#include `"dsoftruntime.h`""
+    )
+}
+
+$oldRefresh = @'
+void MainWindow::refreshTimer() {
+  if (GlobalState::processQueue()) {
+    if (showpreview)
+      scheduleDiplayPreviewUpdate();
+  }
+
+  if (GlobalState::getPrinterStatus() == CONNECTED) {
+'@
+$newRefresh = @'
+void MainWindow::refreshTimer() {
+  bool processedDSoftJob = false;
+  while (DSoftRuntime::instance().processNextJob())
+    processedDSoftJob = true;
+
+  if (GlobalState::processQueue() || processedDSoftJob) {
+    if (showpreview)
+      scheduleDiplayPreviewUpdate();
+  }
+
+  if (GlobalState::getPrinterStatus() == CONNECTED) {
+'@
+if ($mainWindow -notmatch [regex]::Escape('DSoftRuntime::instance().processNextJob()')) {
+    if ($mainWindow -notmatch [regex]::Escape($oldRefresh.Trim())) {
+        throw 'Could not locate refreshTimer implementation in mainwindow.cpp.'
+    }
+    $mainWindow = $mainWindow.Replace($oldRefresh.Trim(), $newRefresh.Trim())
+}
+
+# Immediate invokeMethod is the normal path; keep a slower fallback timer.
+$mainWindow = $mainWindow.Replace('t->setInterval(100);', 't->setInterval(1000);')
+Set-Content -Path $mainWindowPath -Value $mainWindow -NoNewline -Encoding utf8
+
 foreach ($file in $overrideFiles) {
     if (-not (Test-Path (Join-Path $sourceDir $file))) {
         throw "Override was not copied into agent-src: $file"
@@ -84,6 +132,12 @@ foreach ($file in $overrideFiles) {
 if (-not (Select-String -Path $cmakePath -SimpleMatch 'dsoftruntime.cpp' -Quiet)) {
     throw 'CMakeLists.txt was not updated with all DSoft sources.'
 }
+if (-not (Select-String -Path $mainWindowPath -SimpleMatch 'DSoftRuntime::instance().processNextJob()' -Quiet)) {
+    throw 'mainwindow.cpp was not connected to the DSoft runtime.'
+}
+if (-not (Select-String -Path (Join-Path $sourceDir 'json.cpp') -SimpleMatch 'enqueueReceipt' -Quiet)) {
+    throw 'json.cpp was not replaced with the routed implementation.'
+}
 
-Write-Host 'Applied DSoft multi-printer runtime sources.'
+Write-Host 'Applied DSoft routed JSON and immediate queue processing.'
 Write-Host ('Integrated files: ' + ($overrideFiles -join ', '))
