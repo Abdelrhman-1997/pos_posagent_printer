@@ -68,6 +68,26 @@ jobs:
           $cmake = 'agent-src\CMakeLists.txt'
           $text = Get-Content $cmake -Raw
           $text = $text.Replace('C:\\Qt\\6.5.2\\msvc2019_64', 'C:\\Qt\\5.15.2\\msvc2019_64')
+
+          # The upstream Windows code mixes explicit WCHAR APIs with TEXT/_tcscmp.
+          # Qt 6 builds happened to compile with Unicode enabled, while this Qt 5
+          # build did not. Define the normal Windows Unicode macros explicitly so
+          # TEXT() and _tcscmp use wchar_t consistently.
+          if ($text -notmatch 'add_compile_definitions\(UNICODE _UNICODE\)') {
+            $anchor = 'set(CMAKE_CXX_STANDARD_REQUIRED ON)'
+            if ($text -notmatch [regex]::Escape($anchor)) {
+              throw 'Could not locate the C++ standard anchor in CMakeLists.txt.'
+            }
+            $replacement = @'
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if (WIN32)
+  add_compile_definitions(UNICODE _UNICODE)
+endif()
+'@
+            $text = $text.Replace($anchor, $replacement.TrimEnd())
+          }
+
           Set-Content -Path $cmake -Value $text -NoNewline -Encoding utf8
 
       - name: Install Qt 5.15.2 MSVC x64
