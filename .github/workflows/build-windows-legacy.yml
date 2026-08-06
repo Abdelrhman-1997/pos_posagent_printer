@@ -1,0 +1,168 @@
+name: Build DSoft POS Printer Agent Legacy Windows 10
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [legacy-windows10-core2duo]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsoft-pos-printer-agent-legacy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-legacy:
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout build repository
+        uses: actions/checkout@v4
+
+      - name: Read pinned upstream revision
+        id: source
+        shell: pwsh
+        run: |
+          $commit = (Get-Content UPSTREAM_COMMIT -Raw).Trim()
+          if ($commit -notmatch '^[0-9a-f]{40}$') {
+            throw 'UPSTREAM_COMMIT must contain a full 40-character Git SHA.'
+          }
+          "commit=$commit" >> $env:GITHUB_OUTPUT
+
+      - name: Fetch pinned POSAgent source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force agent-src | Out-Null
+          git -C agent-src init
+          git -C agent-src remote add origin https://github.com/dieg0-a/posagentpro-src.git
+          git -C agent-src fetch --depth 1 origin ${{ steps.source.outputs.commit }}
+          git -C agent-src checkout --detach FETCH_HEAD
+
+      - name: Apply upstream Windows fixes
+        shell: pwsh
+        run: |
+          $header = 'agent-src\messagesystem.h'
+          $text = Get-Content $header -Raw
+          $include = '#include "windowsprinter.h"'
+          if ($text -notmatch [regex]::Escape($include)) {
+            $needle = '#include "printer.hpp"'
+            if ($text -notmatch [regex]::Escape($needle)) {
+              throw 'Could not locate printer.hpp include in messagesystem.h.'
+            }
+            $text = $text.Replace($needle, "$needle`r`n$include")
+            Set-Content -Path $header -Value $text -NoNewline -Encoding utf8
+          }
+
+      - name: Integrate DSoft sources and branding
+        shell: pwsh
+        run: |
+          & '.\scripts\apply-agent-overrides.ps1'
+          & '.\scripts\apply-final-runtime.ps1'
+          & '.\scripts\apply-branding.ps1'
+
+      - name: Patch project for Qt 5 legacy runtime
+        shell: pwsh
+        run: |
+          $cmake = 'agent-src\CMakeLists.txt'
+          $text = Get-Content $cmake -Raw
+          $text = $text.Replace('C:\\Qt\\6.5.2\\msvc2019_64', 'C:\\Qt\\5.15.2\\msvc2019_64')
+          Set-Content -Path $cmake -Value $text -NoNewline -Encoding utf8
+
+      - name: Install Qt 5.15.2 MSVC x64
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          arch: 'win64_msvc2019_64'
+          dir: 'C:/'
+          cache: true
+
+      - name: Configure legacy x64 build
+        shell: pwsh
+        run: |
+          cmake -S agent-src -B build-legacy -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_PREFIX_PATH=C:/Qt/5.15.2/msvc2019_64 `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL 2>&1 |
+            Tee-Object -FilePath configure-legacy.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Release
+        shell: pwsh
+        run: |
+          cmake --build build-legacy --config Release --parallel 2 2>&1 |
+            Tee-Object -FilePath build-legacy.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Locate executable
+        id: locate
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path build-legacy -Recurse -Filter 'posagent.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'posagent.exe was not produced.' }
+          "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Prepare lightweight runnable package
+        id: package
+        shell: pwsh
+        run: |
+          $packageDir = Join-Path $PWD 'package\DSoft-POS-Printer-Agent-Win10-Legacy-x64'
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item '${{ steps.locate.outputs.exe_path }}' (Join-Path $packageDir 'DSoftPOSPrinterAgent-Legacy.exe')
+          "package_dir=$packageDir" >> $env:GITHUB_OUTPUT
+
+      - name: Deploy Qt 5 runtime
+        shell: pwsh
+        run: |
+          $windeployqt = 'C:\Qt\5.15.2\msvc2019_64\bin\windeployqt.exe'
+          $exe = Join-Path '${{ steps.package.outputs.package_dir }}' 'DSoftPOSPrinterAgent-Legacy.exe'
+          & $windeployqt --release --compiler-runtime --no-translations $exe 2>&1 |
+            Tee-Object -FilePath windeployqt-legacy.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Bundle licenses and compatibility note
+        shell: pwsh
+        run: |
+          $packageDir = '${{ steps.package.outputs.package_dir }}'
+          Copy-Item 'agent-src\LICENSE' (Join-Path $packageDir 'LICENSE-posagent.txt')
+          @"
+          DSoft POS Printer Agent - Windows 10 Legacy x64
+          =================================================
+          Intended for older x64 PCs such as Core 2 Duo systems.
+          Runtime: Qt 5.15.2 / MSVC x64.
+          Target OS: Windows 10 64-bit.
+          Extract the full ZIP before running the EXE.
+          "@ | Out-File (Join-Path $packageDir 'README-LEGACY.txt') -Encoding utf8
+
+      - name: Smoke test package
+        shell: pwsh
+        run: |
+          $exe = Join-Path '${{ steps.package.outputs.package_dir }}' 'DSoftPOSPrinterAgent-Legacy.exe'
+          $process = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($process.HasExited -and $process.ExitCode -ne 0) {
+            throw "Legacy executable exited with code $($process.ExitCode)."
+          }
+          if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+
+      - name: Create ZIP and checksum
+        shell: pwsh
+        run: |
+          Compress-Archive -Path '${{ steps.package.outputs.package_dir }}\*' `
+            -DestinationPath 'DSoft-POS-Printer-Agent-Win10-Legacy-x64.zip' -Force
+          $hash = (Get-FileHash -Algorithm SHA256 'DSoft-POS-Printer-Agent-Win10-Legacy-x64.zip').Hash
+          "$hash  DSoft-POS-Printer-Agent-Win10-Legacy-x64.zip" |
+            Out-File 'SHA256SUMS-LEGACY.txt' -Encoding ascii
+
+      - name: Upload legacy package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DSoft-POS-Printer-Agent-Win10-Legacy-x64
+          path: |
+            DSoft-POS-Printer-Agent-Win10-Legacy-x64.zip
+            SHA256SUMS-LEGACY.txt
+            configure-legacy.log
+            build-legacy.log
+            windeployqt-legacy.log
+          if-no-files-found: error
+          retention-days: 14
